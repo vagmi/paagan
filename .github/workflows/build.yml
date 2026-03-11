@@ -16,10 +16,8 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            arch: x86_64
           - target: aarch64-apple-darwin
             os: macos-15  # M1 runner
-            arch: arm64
 
     runs-on: ${{ matrix.os }}
     permissions:
@@ -40,9 +38,9 @@ jobs:
           cache-on-failure: true
           key: ${{ matrix.target }}
 
-      - name: Build macOS Binary
+      - name: Build Binary
         run: |
-          cargo build --release --target {{matrix.target}}
+          cargo build --release --target ${{ matrix.target }}
           cp target/release/paagan paagan-${{ matrix.target }}
 
       - name: Import Code Signing Certificate
