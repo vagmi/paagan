@@ -41,7 +41,7 @@ jobs:
       - name: Build Binary
         run: |
           cargo build --release --target ${{ matrix.target }}
-          cp target/release/paagan paagan-${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/paagan paagan-${{ matrix.target }}
 
       - name: Import Code Signing Certificate
         if: matrix.os == 'macos-15'
@@ -165,7 +165,7 @@ jobs:
             exit 1
           fi
 
-      - name: Upload macOS Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: paagan-${{ matrix.target}}
