@@ -43,7 +43,7 @@ impl DockerManager {
         let (mount_point, _) = self.get_mount_info(version);
         
         // Ensure image exists
-        println!("Pulling image {}...", image);
+        eprintln!("Pulling image {}...", image);
         use futures_util::StreamExt;
         let mut pull_stream = self.docker.create_image(
             Some(bollard::image::CreateImageOptions {
