@@ -38,7 +38,7 @@ pub async fn fork_instance(
     let port = pick_unused_port().context("No available ports")?;
 
     // 1. Prepare new instance dirs
-    config_mgr.create_instance_dirs(&new_name)?;
+    config_mgr.create_instance_dirs(&new_name).await?;
     let old_dir = config_mgr.get_instance_dir(&old_name);
     let new_dir = config_mgr.get_instance_dir(&new_name);
 

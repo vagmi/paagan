@@ -29,7 +29,7 @@ pub async fn create_instance(
     name: String,
 ) -> Result<Outputs> {
     let port = pick_unused_port().context("No available ports")?;
-    config_mgr.create_instance_dirs(&name)?;
+    config_mgr.create_instance_dirs(&name).await?;
 
     let instance_dir = config_mgr.get_instance_dir(&name);
     let data_dir = instance_dir.join("data").to_string_lossy().to_string();

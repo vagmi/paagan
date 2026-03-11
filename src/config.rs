@@ -23,21 +23,23 @@ pub struct ConfigManager {
 }
 
 impl ConfigManager {
-    pub fn new() -> Result<Self> {
+    pub async fn new() -> Result<Self> {
         let home_dir = dirs::home_dir().context("Could not find home directory")?;
         let base_dir = home_dir.join(".paagan");
 
         if !base_dir.exists() {
             // Use shell to create to ensure permissions as per user suggestion
-            std::process::Command::new("mkdir")
+            tokio::process::Command::new("mkdir")
                 .arg("-p")
                 .arg(&base_dir)
-                .status()?;
+                .status()
+                .await?;
 
-            std::process::Command::new("mkdir")
+            tokio::process::Command::new("mkdir")
                 .arg("-p")
                 .arg(base_dir.join("instances"))
-                .status()?;
+                .status()
+                .await?;
         }
 
         Ok(Self { base_dir })
@@ -47,24 +49,27 @@ impl ConfigManager {
         self.base_dir.join("instances").join(name)
     }
 
-    pub fn create_instance_dirs(&self, name: &str) -> Result<()> {
+    pub async fn create_instance_dirs(&self, name: &str) -> Result<()> {
         let dir = self.get_instance_dir(name);
 
         // Use shell out as suggested by user
-        std::process::Command::new("mkdir")
+        tokio::process::Command::new("mkdir")
             .arg("-p")
             .arg(dir.join("data"))
-            .status()?;
+            .status()
+            .await?;
 
-        std::process::Command::new("mkdir")
+        tokio::process::Command::new("mkdir")
             .arg("-p")
             .arg(dir.join("archive"))
-            .status()?;
+            .status()
+            .await?;
 
-        std::process::Command::new("mkdir")
+        tokio::process::Command::new("mkdir")
             .arg("-p")
             .arg(dir.join("backups"))
-            .status()?;
+            .status()
+            .await?;
 
         Ok(())
     }

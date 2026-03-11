@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
         let _ = gag::Redirect::stderr(std::fs::File::open("/dev/null")?)?;
     }
 
-    let config_mgr = ConfigManager::new()?;
+    let config_mgr = ConfigManager::new().await?;
     let docker_mgr = DockerManager::new()?;
 
     let output = match cli.command {
@@ -113,19 +113,15 @@ async fn main() -> Result<()> {
             at,
             old_name,
             new_name,
-        } => {
-            commands::fork::fork_instance(&config_mgr, &docker_mgr, at, old_name, new_name).await? 
-        },
-        
+        } => commands::fork::fork_instance(&config_mgr, &docker_mgr, at, old_name, new_name).await?,
+
         Commands::Delete { name, force } => {
             commands::delete::delete_instance(&config_mgr, &docker_mgr, name, force).await?
         }
         Commands::Start { name } => {
             commands::start::start_instance(&config_mgr, &docker_mgr, name).await?
         }
-        Commands::Stop { name } => {
-            commands::stop::stop_instance(&docker_mgr, name).await?
-        }
+        Commands::Stop { name } => commands::stop::stop_instance(&docker_mgr, name).await?,
     };
 
     match cli.format {

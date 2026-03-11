@@ -57,8 +57,8 @@ impl DockerManager {
             let _ = pull_result.context("Failed to pull image")?;
         }
 
-        let uid_output = std::process::Command::new("id").arg("-u").output()?;
-        let gid_output = std::process::Command::new("id").arg("-g").output()?;
+        let uid_output = tokio::process::Command::new("id").arg("-u").output().await?;
+        let gid_output = tokio::process::Command::new("id").arg("-g").output().await?;
         let user_id = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
         let group_id = String::from_utf8_lossy(&gid_output.stdout).trim().to_string();
         let user_str = format!("{}:{}", user_id, group_id);
@@ -168,7 +168,7 @@ impl DockerManager {
 
     pub async fn run_basebackup(&self, name: &str, backup_path: &str) -> Result<()> {
         let container_name = format!("paagan-{}", name);
-        let status = std::process::Command::new("docker")
+        let status = tokio::process::Command::new("docker")
             .arg("exec")
             .arg(container_name)
             .arg("pg_basebackup")
@@ -183,8 +183,9 @@ impl DockerManager {
             .arg("stream")
             .arg("-P")
             .status()
+            .await
             .context("Failed to run pg_basebackup")?;
-        
+
         if !status.success() {
             anyhow::bail!("pg_basebackup failed");
         }
@@ -193,7 +194,7 @@ impl DockerManager {
 
     pub async fn run_wal_switch(&self, name: &str) -> Result<()> {
         let container_name = format!("paagan-{}", name);
-        let status = std::process::Command::new("docker")
+        let status = tokio::process::Command::new("docker")
             .arg("exec")
             .arg(container_name)
             .arg("psql")
@@ -202,8 +203,9 @@ impl DockerManager {
             .arg("-c")
             .arg("SELECT pg_switch_wal();")
             .status()
+            .await
             .context("Failed to run pg_switch_wal")?;
-        
+
         if !status.success() {
             anyhow::bail!("pg_switch_wal failed");
         }
@@ -212,8 +214,8 @@ impl DockerManager {
 
     pub async fn exec_psql(&self, name: &str) -> Result<()> {
         let container_name = format!("paagan-{}", name);
-        // bollard exec is more complex for interactive, so we'll use std::process::Command for psql
-        let status = std::process::Command::new("docker")
+        // bollard exec is more complex for interactive, so we'll use tokio::process::Command for psql
+        let status = tokio::process::Command::new("docker")
             .arg("exec")
             .arg("-it")
             .arg(container_name)
@@ -221,8 +223,9 @@ impl DockerManager {
             .arg("-U")
             .arg("postgres")
             .status()
+            .await
             .context("Failed to execute docker exec")?;
-        
+
         if !status.success() {
             anyhow::bail!("psql command failed");
         }
