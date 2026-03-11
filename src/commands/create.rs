@@ -40,5 +40,19 @@ pub async fn create_instance(
     
     println!("Created instance '{}' on port {}", name, port);
     println!("Connection string: postgresql://postgres@localhost:{}/postgres", port);
+
+    // Trigger initial baseline backup to enable PITR from the start
+    println!("Waiting for database to be ready for initial backup...");
+    // Give some time for post-bootstrap initialization
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    
+    println!("Taking initial baseline backup...");
+    let backup_snapshot_dir = "/backups/base_snapshot";
+    if let Err(e) = docker_mgr.run_basebackup(&name, backup_snapshot_dir).await {
+        eprintln!("Warning: Initial backup failed: {}. PITR will require a manual backup first.", e);
+    } else {
+        println!("Initial baseline backup completed successfully.");
+    }
+
     Ok(())
 }

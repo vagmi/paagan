@@ -82,6 +82,7 @@ impl DockerManager {
             binds.push(format!("{}:/restore", rd));
         }
 
+
         let config = Config {
             image: Some(image),
             user: Some(user_str),
@@ -175,6 +176,7 @@ impl DockerManager {
             .arg("postgres")
             .arg("-D")
             .arg(backup_path)
+            .arg("--checkpoint=fast")
             .arg("-Ft")
             .arg("-z")
             .arg("-X")
