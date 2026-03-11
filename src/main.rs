@@ -75,7 +75,7 @@ enum Commands {
         /// Name of the instance
         name: String,
         /// Force deletion without confirmation
-        #[arg(short, long)]
+        #[arg(long)]
         force: bool,
     },
     /// Start instance
