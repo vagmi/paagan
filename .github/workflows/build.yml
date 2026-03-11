@@ -1,0 +1,201 @@
+name: Build Paagan
+
+# This allows you to run this workflow manually from the Actions tab
+on:
+  workflow_dispatch:
+  push:
+    branches: ['master']
+    tags:
+      - 'v*'
+
+jobs:
+
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            arch: x86_64
+          - target: aarch64-apple-darwin
+            os: macos-15  # M1 runner
+            arch: arm64
+
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Public Repo
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: ${{ matrix.target }}
+
+      - name: Build macOS Binary
+        run: |
+          cargo build --release --target {{matrix.target}}
+          cp target/release/paagan paagan-${{ matrix.target }}
+
+      - name: Import Code Signing Certificate
+        if: matrix.os == 'macos-15'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+        run: |
+          # Create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          # Import certificate from secrets (use -D for macOS, redirect to file)
+          echo "$APPLE_CERTIFICATE" | base64 -D > $CERTIFICATE_PATH
+
+          # Verify the P12 file was decoded correctly and password works
+          echo "Verifying P12 file with openssl..."
+          if openssl pkcs12 -info -in $CERTIFICATE_PATH -noout -passin pass:"$APPLE_CERTIFICATE_PASSWORD" 2>&1; then
+            echo "✅ P12 file verification successful"
+            echo "Certificate details:"
+            openssl pkcs12 -in $CERTIFICATE_PATH -nokeys -clcerts -passin pass:"$APPLE_CERTIFICATE_PASSWORD" | \
+              openssl x509 -noout -subject -issuer -dates
+          else
+            echo "❌ P12 file verification failed - check password and base64 encoding"
+            exit 1
+          fi
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Extract cert and key using openssl (more reliable than security's P12 import)
+          CERT_PATH=$RUNNER_TEMP/cert.pem
+          KEY_PATH=$RUNNER_TEMP/key.pem
+
+          echo "Extracting certificate and key with openssl..."
+          openssl pkcs12 -in $CERTIFICATE_PATH \
+            -clcerts -nokeys \
+            -out $CERT_PATH \
+            -passin pass:"$APPLE_CERTIFICATE_PASSWORD"
+
+          openssl pkcs12 -in $CERTIFICATE_PATH \
+            -nocerts -nodes \
+            -out $KEY_PATH \
+            -passin pass:"$APPLE_CERTIFICATE_PASSWORD"
+
+          # Import certificate and key separately (no password needed now)
+          security import $CERT_PATH -k $KEYCHAIN_PATH -T /usr/bin/codesign -T /usr/bin/security
+          security import $KEY_PATH -k $KEYCHAIN_PATH -T /usr/bin/codesign -T /usr/bin/security
+
+          # Clean up temporary files
+          rm -f $CERT_PATH $KEY_PATH
+
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          # Enable codesigning from a non user interactive shell
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+      - name: Code Sign Binary
+        if: matrix.os == 'macos-15'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # List available identities for debugging
+          echo "Available signing identities:"
+          security find-identity -v -p codesigning
+
+          # Find the Developer ID Application certificate
+          IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | grep -o '".*"' | tr -d '"')
+          echo "Using identity: $IDENTITY"
+
+          # Sign the binary
+          codesign --force --sign "$IDENTITY" \
+            --options runtime \
+            --timestamp \
+            paagan-${{ matrix.target }}
+
+          # Verify the signature
+          codesign --verify --verbose paagan-${{ matrix.target }}
+          codesign --display --verbose=4 paagan-${{ matrix.target }}
+
+      - name: Create ZIP for Notarization
+        if: matrix.os == 'macos-15'
+        run: |
+          ditto -c -k --keepParent paagan-${{ matrix.target }} paagan-${{ matrix.target}}.zip
+
+      - name: Notarize Binary
+        if: matrix.os == 'macos-15'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        timeout-minutes: 2
+        run: |
+          echo "Submitting binary for notarization (async, no wait)..."
+
+          # Submit for notarization without waiting
+          SUBMISSION_OUTPUT=$(xcrun notarytool submit paagan-${{ matrix.target}}.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" 2>&1)
+
+          echo "$SUBMISSION_OUTPUT"
+
+          # Extract submission ID
+          SUBMISSION_ID=$(echo "$SUBMISSION_OUTPUT" | grep -E "^\s+id:" | awk '{print $2}' | head -1)
+
+          if [ -n "$SUBMISSION_ID" ]; then
+            echo "✅ Notarization submitted successfully!"
+            echo "Submission ID: $SUBMISSION_ID"
+            echo ""
+            echo "⏳ Notarization will complete in 5-20 minutes."
+            echo "The binary is code-signed and will work immediately."
+            echo "Gatekeeper will verify notarization online on first run."
+            echo ""
+            echo "Check status with:"
+            echo "xcrun notarytool info $SUBMISSION_ID --apple-id <APPLE_ID> --password <APP_PASSWORD> --team-id <TEAM_ID>"
+          else
+            echo "❌ Failed to submit for notarization"
+            exit 1
+          fi
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: paagan-${{ matrix.target}}
+          path: paagan-${{ matrix.target}}
+
+  create-release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List Downloaded Files
+        run: |
+          ls -laR artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Binary Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/paagan-aarch64-apple-darwin/paagan-aarch64-apple-darwin
+            artifacts/paagan-x86_64-unknown-linux-musl/paagan-x86_64-unknown-linux-musl
