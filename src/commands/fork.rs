@@ -1,13 +1,15 @@
+use crate::CommandOutput;
 use crate::commands::Outputs;
 use crate::config::{ConfigManager, InstanceMetadata};
-use crate::docker::DockerManager;
-use crate::CommandOutput;
+use crate::docker::{ContainerSpec, DockerManager};
+use crate::config::InitMode;
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
 use portpicker::pick_unused_port;
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use tar::Archive;
 
 #[derive(Serialize)]
@@ -54,14 +56,16 @@ pub async fn fork_instance(
         }
 
         docker_mgr
-            .run_basebackup(&old_name, backup_snapshot_dir)
+            .run_basebackup(&old_name, backup_snapshot_dir, old_metadata.init_mode)
             .await?;
     } else {
         eprintln!("Using existing base backup of '{}' for PITR...", old_name);
     }
 
     eprintln!("Switching WAL on source to ensure all logs are archived...");
-    docker_mgr.run_wal_switch(&old_name).await?;
+    docker_mgr
+        .run_wal_switch(&old_name, old_metadata.init_mode)
+        .await?;
     // Grace period to ensure background archiver finishes copying WAL files to the archive directory
     eprintln!("Waiting 10s for WAL archiving to complete...");
     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -71,7 +75,8 @@ pub async fn fork_instance(
     let base_tar = local_backup_snapshot_dir.join("base.tar");
     let base_tar_gz = local_backup_snapshot_dir.join("base.tar.gz");
 
-    let (_, new_data_subdir) = docker_mgr.get_mount_info(&old_metadata.version);
+    let (_, new_data_subdir) =
+        docker_mgr.mount_info(old_metadata.init_mode, &old_metadata.version);
     let new_data_root = new_dir.join("data");
     let new_actual_data_dir = if let Some(ref sub) = new_data_subdir {
         new_data_root.join(sub)
@@ -96,6 +101,17 @@ pub async fn fork_instance(
         archive.unpack(&new_actual_data_dir)?;
     } else {
         anyhow::bail!("Base backup file not found");
+    }
+
+    // The standard postgres entrypoint chmods PGDATA to 0700 on boot. cnpg
+    // mode invokes `postgres` directly with no entrypoint, so the unpacked
+    // tar's directory perms (typically 0755) trip postgres' "invalid
+    // permissions" check. Force 0700.
+    if matches!(old_metadata.init_mode, InitMode::Cnpg) {
+        fs::set_permissions(
+            &new_actual_data_dir,
+            fs::Permissions::from_mode(0o700),
+        )?;
     }
 
     // 4. Prepare recovery
@@ -127,17 +143,23 @@ pub async fn fork_instance(
     let new_backup_dir = new_dir.join("backups").to_string_lossy().to_string();
     let old_archive_dir = old_dir.join("archive").to_string_lossy().to_string();
 
-    let container_id = docker_mgr
-        .create_instance_container(
-            &new_name,
-            &old_metadata.version,
-            port,
-            &new_data_root.to_string_lossy().to_string(),
-            &new_archive_dir,
-            &new_backup_dir,
-            Some(&old_archive_dir),
-        )
-        .await?;
+    let new_data_root_str = new_data_root.to_string_lossy().to_string();
+    let resolved_image = old_metadata.resolved_image();
+
+    let spec = ContainerSpec {
+        name: &new_name,
+        image: &resolved_image,
+        version: &old_metadata.version,
+        init_mode: old_metadata.init_mode,
+        port,
+        data_dir: &new_data_root_str,
+        archive_dir: &new_archive_dir,
+        backup_dir: &new_backup_dir,
+        restore_dir: Some(&old_archive_dir),
+        shared_preload_libraries: old_metadata.shared_preload_libraries.as_deref(),
+    };
+
+    let container_id = docker_mgr.create_instance_container(&spec).await?;
 
     let metadata = InstanceMetadata {
         name: new_name.clone(),
@@ -145,6 +167,9 @@ pub async fn fork_instance(
         port,
         container_id: Some(container_id),
         data_subdir: new_data_subdir,
+        image: old_metadata.image,
+        init_mode: old_metadata.init_mode,
+        shared_preload_libraries: old_metadata.shared_preload_libraries,
     };
     config_mgr.add_instance(metadata)?;
 

@@ -4,6 +4,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum InitMode {
+    #[default]
+    Standard,
+    Cnpg,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InstanceMetadata {
     pub name: String,
@@ -11,6 +19,20 @@ pub struct InstanceMetadata {
     pub port: u16,
     pub container_id: Option<String>,
     pub data_subdir: Option<String>,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub init_mode: InitMode,
+    #[serde(default)]
+    pub shared_preload_libraries: Option<String>,
+}
+
+impl InstanceMetadata {
+    pub fn resolved_image(&self) -> String {
+        self.image
+            .clone()
+            .unwrap_or_else(|| format!("postgres:{}", self.version))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

@@ -1,6 +1,7 @@
-use crate::commands::Outputs;
-use crate::docker::DockerManager;
 use crate::CommandOutput;
+use crate::commands::Outputs;
+use crate::config::ConfigManager;
+use crate::docker::DockerManager;
 use anyhow::Result;
 use serde::Serialize;
 
@@ -15,7 +16,12 @@ impl CommandOutput for PsqlOutput {
     }
 }
 
-pub async fn connect_psql(docker_mgr: &DockerManager, name: String) -> Result<Outputs> {
-    docker_mgr.exec_psql(&name).await?;
-    Ok(Outputs::Psql( PsqlOutput { name }))
+pub async fn connect_psql(
+    config_mgr: &ConfigManager,
+    docker_mgr: &DockerManager,
+    name: String,
+) -> Result<Outputs> {
+    let metadata = config_mgr.get_instance(&name)?;
+    docker_mgr.exec_psql(&name, metadata.init_mode).await?;
+    Ok(Outputs::Psql(PsqlOutput { name }))
 }

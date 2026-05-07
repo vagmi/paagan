@@ -18,12 +18,40 @@ pub struct InstanceStatus {
 
 impl CommandOutput for ListOutput {
     fn to_text(&self) -> String {
-        let mut out = format!("{:<15} {:<10} {:<10} {:<10}\n", "NAME", "VERSION", "PORT", "STATUS");
-        for inst in &self.instances {
-            out.push_str(&format!(
+        let show_image = self.instances.iter().any(|i| i.metadata.image.is_some());
+
+        let mut out = if show_image {
+            format!(
+                "{:<15} {:<10} {:<10} {:<10} {}\n",
+                "NAME", "VERSION", "PORT", "STATUS", "IMAGE"
+            )
+        } else {
+            format!(
                 "{:<15} {:<10} {:<10} {:<10}\n",
-                inst.metadata.name, inst.metadata.version, inst.metadata.port, inst.status
-            ));
+                "NAME", "VERSION", "PORT", "STATUS"
+            )
+        };
+
+        for inst in &self.instances {
+            if show_image {
+                let image = inst.metadata.image.as_deref().unwrap_or("-");
+                out.push_str(&format!(
+                    "{:<15} {:<10} {:<10} {:<10} {}\n",
+                    inst.metadata.name,
+                    inst.metadata.version,
+                    inst.metadata.port,
+                    inst.status,
+                    image,
+                ));
+            } else {
+                out.push_str(&format!(
+                    "{:<15} {:<10} {:<10} {:<10}\n",
+                    inst.metadata.name,
+                    inst.metadata.version,
+                    inst.metadata.port,
+                    inst.status,
+                ));
+            }
         }
         out
     }

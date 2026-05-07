@@ -1,7 +1,7 @@
+use crate::CommandOutput;
 use crate::commands::Outputs;
 use crate::config::ConfigManager;
-use crate::docker::DockerManager;
-use crate::CommandOutput;
+use crate::docker::{ContainerSpec, DockerManager};
 use anyhow::Result;
 use serde::Serialize;
 
@@ -48,18 +48,22 @@ pub async fn start_instance(
         let data_dir = instance_dir.join("data").to_string_lossy().to_string();
         let archive_dir = instance_dir.join("archive").to_string_lossy().to_string();
         let backup_dir = instance_dir.join("backups").to_string_lossy().to_string();
+        let resolved_image = metadata.resolved_image();
 
-        docker_mgr
-            .create_instance_container(
-                &name,
-                &metadata.version,
-                metadata.port,
-                &data_dir,
-                &archive_dir,
-                &backup_dir,
-                None,
-            )
-            .await?;
+        let spec = ContainerSpec {
+            name: &name,
+            image: &resolved_image,
+            version: &metadata.version,
+            init_mode: metadata.init_mode,
+            port: metadata.port,
+            data_dir: &data_dir,
+            archive_dir: &archive_dir,
+            backup_dir: &backup_dir,
+            restore_dir: None,
+            shared_preload_libraries: metadata.shared_preload_libraries.as_deref(),
+        };
+
+        docker_mgr.create_instance_container(&spec).await?;
     }
 
     eprintln!("Instance '{}' started on port {}.", name, metadata.port);

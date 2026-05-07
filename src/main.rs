@@ -4,7 +4,7 @@ mod docker;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use config::ConfigManager;
+use config::{ConfigManager, InitMode};
 use docker::DockerManager;
 use serde::Serialize;
 
@@ -30,6 +30,21 @@ pub enum OutputFormat {
     Json,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum InitModeArg {
+    Standard,
+    Cnpg,
+}
+
+impl From<InitModeArg> for InitMode {
+    fn from(v: InitModeArg) -> Self {
+        match v {
+            InitModeArg::Standard => InitMode::Standard,
+            InitModeArg::Cnpg => InitMode::Cnpg,
+        }
+    }
+}
+
 pub trait CommandOutput: Serialize {
     fn to_text(&self) -> String;
 
@@ -44,9 +59,20 @@ enum Commands {
     List,
     /// Create instance
     Create {
-        /// PostgreSQL version
+        /// PostgreSQL version (used to build postgres:<version> when --image is not set)
         #[arg(short, long, default_value = "18")]
         version: String,
+        /// Full Docker image to use (overrides --version), e.g. ghcr.io/vagmi/searchbase:latest
+        #[arg(long)]
+        image: Option<String>,
+        /// Comma-separated list passed to postgres -c shared_preload_libraries=...
+        #[arg(long)]
+        shared_preload_libraries: Option<String>,
+        /// Init lifecycle. `standard` uses the official postgres entrypoint;
+        /// `cnpg` runs an explicit initdb step then `postgres -D ...`, matching
+        /// CloudNativePG-style images such as searchbase.
+        #[arg(long, value_enum, default_value_t = InitModeArg::Standard)]
+        init_mode: InitModeArg,
         /// Name of the instance
         name: String,
     },
@@ -104,10 +130,29 @@ async fn main() -> Result<()> {
 
     let output = match cli.command {
         Commands::List => commands::list::list_instances(&config_mgr, &docker_mgr).await?,
-        Commands::Create { version, name } => {
-            commands::create::create_instance(&config_mgr, &docker_mgr, version, name).await?
+        Commands::Create {
+            version,
+            image,
+            shared_preload_libraries,
+            init_mode,
+            name,
+        } => {
+            commands::create::create_instance(
+                &config_mgr,
+                &docker_mgr,
+                commands::create::CreateArgs {
+                    version,
+                    image,
+                    shared_preload_libraries,
+                    init_mode: init_mode.into(),
+                    name,
+                },
+            )
+            .await?
         }
-        Commands::Psql { name } => commands::psql::connect_psql(&docker_mgr, name).await?,
+        Commands::Psql { name } => {
+            commands::psql::connect_psql(&config_mgr, &docker_mgr, name).await?
+        }
         Commands::Show { name } => commands::show::show_instance(&config_mgr, name).await?,
         Commands::Fork {
             at,
