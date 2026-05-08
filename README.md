@@ -46,6 +46,36 @@ Creates a new PostgreSQL instance. It pulls the required image, sets up the dire
 paagan create --version 18-alpine my-db
 ```
 
+#### Custom images and `shared_preload_libraries`
+
+You can run any PostgreSQL-compatible image (extension bundles like
+[`searchbase`](https://github.com/vagmi/searchbase), pgvector builds, etc.) by
+passing `--image` and selecting `--init-mode cnpg`. The `cnpg` mode runs an
+explicit `initdb` step and invokes `postgres -D ...` directly, mirroring how
+CloudNativePG-style images expect to be started; the default `standard` mode
+continues to use the official `postgres` entrypoint.
+
+`--shared-preload-libraries` is passed through as `-c shared_preload_libraries=...`,
+needed for extensions like `pg_textsearch` that must be loaded at server start.
+
+```bash
+paagan create \
+  --image ghcr.io/vagmi/searchbase:latest \
+  --shared-preload-libraries pg_textsearch \
+  --init-mode cnpg \
+  searchdb
+
+# Then create the bundled extensions in your database:
+paagan psql searchdb
+# postgres=# CREATE EXTENSION vector;
+# postgres=# CREATE EXTENSION vectorscale CASCADE;
+# postgres=# CREATE EXTENSION pg_textsearch;
+```
+
+The image, init mode, and `shared_preload_libraries` are persisted with the
+instance, so `start` (after a manual container removal) and `fork` will reuse
+the same configuration automatically.
+
 ### `start` / `stop`
 Starts or stops an existing database instance. `start` will recreate the container if it was manually removed, ensuring your data is always accessible.
 ```bash
