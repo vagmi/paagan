@@ -104,6 +104,10 @@ impl DockerManager {
     pub async fn run_init_container(&self, spec: &ContainerSpec<'_>) -> Result<()> {
         debug_assert!(matches!(spec.init_mode, InitMode::Cnpg));
 
+        // Always re-asserts the superuser password via a temporary local-only
+        // postgres start. Belt-and-suspenders for custom images where initdb's
+        // --pwfile may be skipped (PG_VERSION already present) or where the
+        // image pre-populated the data dir without a known password.
         let init_script = r#"
 mkdir -p "$PGDATA"
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
@@ -119,6 +123,13 @@ if [ ! -s "$PGDATA/PG_VERSION" ]; then
         echo "host all all ::/0      scram-sha-256"
     } >> "$PGDATA/pg_hba.conf"
 fi
+
+pg_ctl -D "$PGDATA" \
+    -o "-c listen_addresses='' -c unix_socket_directories=/tmp" \
+    -w start
+psql -h /tmp -U postgres -v ON_ERROR_STOP=1 \
+    -c "ALTER USER postgres WITH PASSWORD '$POSTGRES_PASSWORD';"
+pg_ctl -D "$PGDATA" -m fast -w stop
 "#;
 
         let user_str = Self::host_user_str().await?;
@@ -220,6 +231,11 @@ fi
             }]),
         );
 
+        // Explicitly expose 5432 so the binding works even for custom images
+        // (e.g. cnpg-style) whose Dockerfile may not declare EXPOSE 5432.
+        let mut exposed_ports: HashMap<String, HashMap<(), ()>> = HashMap::new();
+        exposed_ports.insert("5432/tcp".to_string(), HashMap::new());
+
         let (mount_point, _) = self.mount_info(spec.init_mode, spec.version);
         let mut binds = vec![
             format!("{}:{}", spec.data_dir, mount_point),
@@ -253,6 +269,7 @@ fi
                         "POSTGRES_PASSWORD=password".to_string(),
                         "POSTGRES_HOST_AUTH_METHOD=trust".to_string(),
                     ]),
+                    exposed_ports: Some(exposed_ports),
                     host_config: Some(host_config),
                     cmd: Some(self.standard_postgres_cmd(spec.shared_preload_libraries)),
                     ..Default::default()
@@ -264,6 +281,7 @@ fi
                     image: Some(spec.image.to_string()),
                     user: Some(user_str),
                     env: Some(vec![format!("PGDATA={}", CNPG_PGDATA)]),
+                    exposed_ports: Some(exposed_ports),
                     host_config: Some(host_config),
                     entrypoint: Some(vec!["postgres".to_string()]),
                     cmd: Some(self.cnpg_postgres_cmd(spec.shared_preload_libraries)),

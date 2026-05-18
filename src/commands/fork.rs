@@ -171,9 +171,9 @@ pub async fn fork_instance(
         init_mode: old_metadata.init_mode,
         shared_preload_libraries: old_metadata.shared_preload_libraries,
     };
+    let connection_string = metadata.connection_string();
     config_mgr.add_instance(metadata)?;
 
-    let connection_string = format!("postgresql://postgres@localhost:{}/postgres", port);
     eprintln!("Forked '{}' to '{}' on port {}", old_name, new_name, port);
 
     Ok(Outputs::Fork(ForkOutput {

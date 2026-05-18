@@ -82,9 +82,9 @@ pub async fn create_instance(
         init_mode,
         shared_preload_libraries,
     };
+    let connection_string = metadata.connection_string();
     config_mgr.add_instance(metadata)?;
 
-    let connection_string = format!("postgresql://postgres@localhost:{}/postgres", port);
     eprintln!("Created instance '{}' on port {}", name, port);
     eprintln!("Connection string: {}", connection_string);
 

@@ -33,6 +33,21 @@ impl InstanceMetadata {
             .clone()
             .unwrap_or_else(|| format!("postgres:{}", self.version))
     }
+
+    pub fn default_password(&self) -> &'static str {
+        match self.init_mode {
+            InitMode::Standard => "password",
+            InitMode::Cnpg => "postgres",
+        }
+    }
+
+    pub fn connection_string(&self) -> String {
+        format!(
+            "postgresql://postgres:{}@localhost:{}/postgres",
+            self.default_password(),
+            self.port,
+        )
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

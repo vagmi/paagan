@@ -9,6 +9,7 @@ pub struct ShowOutput {
     pub name: String,
     pub version: String,
     pub port: u16,
+    pub password: String,
     pub connection_string: String,
     pub data_directory: String,
     pub image: String,
@@ -19,12 +20,13 @@ pub struct ShowOutput {
 impl CommandOutput for ShowOutput {
     fn to_text(&self) -> String {
         let mut out = format!(
-            "Instance: {}\nVersion: {}\nImage: {}\nInit mode: {}\nPort: {}\nConnection string: {}\nData directory: {}",
+            "Instance: {}\nVersion: {}\nImage: {}\nInit mode: {}\nPort: {}\nPassword: {}\nConnection string: {}\nData directory: {}",
             self.name,
             self.version,
             self.image,
             self.init_mode,
             self.port,
+            self.password,
             self.connection_string,
             self.data_directory
         );
@@ -37,7 +39,8 @@ impl CommandOutput for ShowOutput {
 
 pub async fn show_instance(config_mgr: &ConfigManager, name: String) -> Result<Outputs> {
     let metadata = config_mgr.get_instance(&name)?;
-    let connection_string = format!("postgresql://postgres@localhost:{}/postgres", metadata.port);
+    let connection_string = metadata.connection_string();
+    let password = metadata.default_password().to_string();
     let data_directory = config_mgr
         .get_instance_dir(&name)
         .join("data")
@@ -54,6 +57,7 @@ pub async fn show_instance(config_mgr: &ConfigManager, name: String) -> Result<O
         name: metadata.name,
         version: metadata.version,
         port: metadata.port,
+        password,
         connection_string,
         data_directory,
         image,
