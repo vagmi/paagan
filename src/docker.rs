@@ -30,18 +30,14 @@ const CNPG_DATA_MOUNT: &str = "/var/lib/postgresql/data";
 const CNPG_PGDATA: &str = "/var/lib/postgresql/data/pgdata";
 const CNPG_PGDATA_SUBDIR: &str = "pgdata";
 
-
 impl DockerManager {
     pub fn new() -> Result<Self> {
-        let docker = Docker::connect_with_local_defaults().context("Failed to connect to Docker")?;
+        let docker =
+            Docker::connect_with_local_defaults().context("Failed to connect to Docker")?;
         Ok(Self { docker })
     }
 
-    pub fn mount_info(
-        &self,
-        init_mode: InitMode,
-        version: &str,
-    ) -> (&'static str, Option<String>) {
+    pub fn mount_info(&self, init_mode: InitMode, version: &str) -> (&'static str, Option<String>) {
         match init_mode {
             InitMode::Standard => self.standard_mount_info(version),
             InitMode::Cnpg => (CNPG_DATA_MOUNT, Some(CNPG_PGDATA_SUBDIR.to_string())),
@@ -86,10 +82,20 @@ impl DockerManager {
     }
 
     async fn host_user_str() -> Result<String> {
-        let uid_output = tokio::process::Command::new("id").arg("-u").output().await?;
-        let gid_output = tokio::process::Command::new("id").arg("-g").output().await?;
-        let user_id = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
-        let group_id = String::from_utf8_lossy(&gid_output.stdout).trim().to_string();
+        let uid_output = tokio::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .await?;
+        let gid_output = tokio::process::Command::new("id")
+            .arg("-g")
+            .output()
+            .await?;
+        let user_id = String::from_utf8_lossy(&uid_output.stdout)
+            .trim()
+            .to_string();
+        let group_id = String::from_utf8_lossy(&gid_output.stdout)
+            .trim()
+            .to_string();
         Ok(format!("{}:{}", user_id, group_id))
     }
 
@@ -247,8 +253,7 @@ pg_ctl -D "$PGDATA" -m fast -w stop
         }
         if matches!(spec.init_mode, InitMode::Cnpg) {
             let user_str = Self::host_user_str().await?;
-            let (passwd_path, group_path) =
-                ensure_passwd_files(spec.data_dir, &user_str).await?;
+            let (passwd_path, group_path) = ensure_passwd_files(spec.data_dir, &user_str).await?;
             binds.push(format!("{}:/etc/passwd:ro", passwd_path));
             binds.push(format!("{}:/etc/group:ro", group_path));
         }
@@ -432,23 +437,52 @@ pg_ctl -D "$PGDATA" -m fast -w stop
     }
 
     pub async fn run_wal_switch(&self, name: &str, init_mode: InitMode) -> Result<()> {
+        self.query_scalar(name, init_mode, "SELECT pg_switch_wal()")
+            .await
+            .context("pg_switch_wal failed")?;
+        Ok(())
+    }
+
+    /// Run a query through psql inside the container and return the single
+    /// value it prints.
+    pub async fn query_scalar(&self, name: &str, init_mode: InitMode, sql: &str) -> Result<String> {
         let container_name = format!("paagan-{}", name);
         let mut cmd = tokio::process::Command::new("docker");
         cmd.arg("exec").arg(&container_name).arg("psql");
         if matches!(init_mode, InitMode::Cnpg) {
             cmd.arg("-h").arg("/tmp");
         }
-        cmd.arg("-U")
-            .arg("postgres")
-            .arg("-c")
-            .arg("SELECT pg_switch_wal();");
+        cmd.arg("-U").arg("postgres").arg("-Atc").arg(sql);
 
-        let status = cmd.status().await.context("Failed to run pg_switch_wal")?;
-
-        if !status.success() {
-            anyhow::bail!("pg_switch_wal failed");
+        let output = cmd.output().await.context("Failed to run psql")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "psql query failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
         }
-        Ok(())
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    pub async fn wal_segment_size(&self, name: &str, init_mode: InitMode) -> Result<u64> {
+        let value = self
+            .query_scalar(
+                name,
+                init_mode,
+                "SELECT setting FROM pg_settings WHERE name = 'wal_segment_size'",
+            )
+            .await?;
+        value
+            .parse()
+            .with_context(|| format!("Unexpected wal_segment_size '{}'", value))
+    }
+
+    pub async fn is_running(&self, name: &str) -> Result<bool> {
+        Ok(self
+            .list_instances()
+            .await?
+            .iter()
+            .any(|(n, s)| n == name && s == "running"))
     }
 
     pub async fn exec_psql(&self, name: &str, init_mode: InitMode) -> Result<()> {
@@ -460,7 +494,10 @@ pg_ctl -D "$PGDATA" -m fast -w stop
         }
         cmd.arg("-U").arg("postgres");
 
-        let status = cmd.status().await.context("Failed to execute docker exec")?;
+        let status = cmd
+            .status()
+            .await
+            .context("Failed to execute docker exec")?;
 
         if !status.success() {
             anyhow::bail!("psql command failed");

@@ -1,7 +1,7 @@
-use crate::commands::Outputs;
+use crate::CommandOutput;
+use crate::commands::{Outputs, schedule};
 use crate::config::ConfigManager;
 use crate::docker::DockerManager;
-use crate::CommandOutput;
 use anyhow::Result;
 use serde::Serialize;
 
@@ -50,11 +50,15 @@ pub async fn delete_instance(
         eprintln!("Warning: could not remove docker container: {}", e);
     }
 
+    if let Err(e) = schedule::remove_instance_schedule(config_mgr, &name) {
+        eprintln!("Warning: could not remove compaction schedule: {:#}", e);
+    }
+
     eprintln!("Removing data and configuration for '{}'...", name);
     config_mgr.remove_instance(&name)?;
 
     eprintln!("Instance '{}' deleted successfully.", name);
-    Ok( Outputs::Delete( DeleteOutput {
+    Ok(Outputs::Delete(DeleteOutput {
         name,
         deleted: true,
     }))

@@ -13,6 +13,27 @@ The primary motivation for this project is to have a developer experience simila
 - **Cloud-Native Logic:** Mimics production-grade database management patterns (WAL archiving, base backups).
 - **Portable:** Automatically handles UID/GID mapping to ensure Docker has correct permissions on your local filesystem.
 
+## Architecture
+
+```mermaid
+graph TD
+    Main[main.rs] --> Commands[commands/mod.rs]
+    Main --> Config[config.rs]
+    Main --> Docker[docker.rs]
+
+    Commands --> List[list.rs]
+    Commands --> Create[create.rs]
+    Commands --> Fork[fork.rs]
+    Commands --> Psql[psql.rs]
+    Commands --> Delete[delete.rs]
+    Commands --> Show[show.rs]
+    Commands --> Start[start.rs]
+    Commands --> Stop[stop.rs]
+
+    List & Create & Fork & Psql & Delete & Show & Start & Stop -.-> Config
+    List & Create & Fork & Psql & Delete & Start & Stop -.-> Docker
+```
+
 ## Installation
 
 Ensure you have Rust and Docker installed.
@@ -30,7 +51,7 @@ All configuration and data are stored in `~/.paagan`:
 - `instances.json`: Metadata for all managed instances.
 - `instances/<name>/data`: PostgreSQL data directory.
 - `instances/<name>/archive`: WAL archive directory.
-- `instances/<name>/backups`: Base backups used for forking.
+- `instances/<name>/backups/<timestamp>`: Base backups used for forking and as `compact` retention anchors.
 
 ## Commands
 
@@ -104,6 +125,46 @@ paagan fork source-db forked-db
 # Fork to a specific timestamp (PITR)
 paagan fork --at "2026-03-10 14:30:00+00" source-db recovery-db
 ```
+PITR restores the newest base backup taken at or before `--at` and replays WAL
+from there. Timestamps without an offset are treated as UTC. A target older
+than the oldest kept backup fails with the earliest restorable time.
+
+### `compact`
+Every instance archives WAL continuously, so `archive/` grows without bound.
+`compact` takes a fresh base backup, then removes base backups older than
+`--retain` (default `7d`) and every archived WAL segment older than the oldest
+kept backup.
+
+By default the newest backup *older* than `--retain` is also kept. It anchors
+the start of the window, so you can always fork to any point in the last
+`--retain`, however often compaction runs. Disk use is therefore up to
+`--retain` plus one compaction interval of WAL. `--strict` deletes that
+backup too: nothing older than `--retain` survives, but the restorable window
+can be shorter. `show` prints the current window and archive size.
+```bash
+# See what would be removed (no backup taken, nothing deleted)
+paagan compact --dry-run my-db
+
+# Keep (at least) one week of history
+paagan compact my-db
+
+# Compact every running instance, keeping exactly 3 days at most
+paagan compact --all --retain 3d --strict
+```
+
+#### Scheduling
+`--schedule <cron>` registers the compaction with the OS scheduler (launchd on
+macOS, systemd user timers on Linux, Task Scheduler on Windows) instead of
+running it now. paagan itself doesn't stay running. Output is appended to
+`~/.paagan/logs/<job>.log`, and `show` lists an instance's schedules.
+```bash
+paagan compact --schedule "0 3 * * *" my-db       # daily at 03:00 local time
+paagan compact --schedule @daily --all --retain 3d
+paagan compact --unschedule my-db                 # or: --unschedule --all
+```
+The job runs the `paagan` binary you scheduled it from, with your current
+`PATH` and `DOCKER_*` variables. Re-run `--schedule` after moving the binary.
+`delete` removes an instance's schedule.
 
 ### `delete`
 Removes the database instance, its Docker container, and all associated data on disk.
@@ -112,7 +173,7 @@ paagan delete my-db
 ```
 
 ## How Forking Works (The CNPG way)
-1. `paagan` triggers a `pg_basebackup` on the source instance.
+1. `paagan` triggers a `pg_basebackup` on the source instance (or, for PITR, picks the newest existing backup taken before the target).
 2. It ensures all pending WAL logs are archived.
 3. It extracts the backup into the new instance's data directory.
 4. It configures a `restore_command` to pull logs from the source's archive.

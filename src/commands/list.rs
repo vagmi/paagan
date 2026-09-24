@@ -1,7 +1,7 @@
+use crate::CommandOutput;
 use crate::commands::Outputs;
 use crate::config::{ConfigManager, InstanceMetadata};
 use crate::docker::DockerManager;
-use crate::CommandOutput;
 use anyhow::Result;
 use serde::Serialize;
 
@@ -46,10 +46,7 @@ impl CommandOutput for ListOutput {
             } else {
                 out.push_str(&format!(
                     "{:<15} {:<10} {:<10} {:<10}\n",
-                    inst.metadata.name,
-                    inst.metadata.version,
-                    inst.metadata.port,
-                    inst.status,
+                    inst.metadata.name, inst.metadata.version, inst.metadata.port, inst.status,
                 ));
             }
         }

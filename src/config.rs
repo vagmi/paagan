@@ -50,9 +50,22 @@ impl InstanceMetadata {
     }
 }
 
+/// A `paagan compact` run registered with the OS scheduler.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CompactSchedule {
+    /// Instance name, or `None` for `--all`.
+    pub instance: Option<String>,
+    pub cron: String,
+    pub retain: String,
+    pub strict: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     pub instances: HashMap<String, InstanceMetadata>,
+    /// Keyed by native-cron job id.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub compact_schedules: HashMap<String, CompactSchedule>,
 }
 
 pub struct ConfigManager {
@@ -80,6 +93,10 @@ impl ConfigManager {
         }
 
         Ok(Self { base_dir })
+    }
+
+    pub fn logs_dir(&self) -> PathBuf {
+        self.base_dir.join("logs")
     }
 
     pub fn get_instance_dir(&self, name: &str) -> PathBuf {

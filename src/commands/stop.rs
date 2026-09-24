@@ -1,6 +1,6 @@
+use crate::CommandOutput;
 use crate::commands::Outputs;
 use crate::docker::DockerManager;
-use crate::CommandOutput;
 use anyhow::Result;
 use serde::Serialize;
 

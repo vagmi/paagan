@@ -1,10 +1,12 @@
 use crate::CommandOutput;
 
+pub mod compact;
 pub mod create;
 pub mod delete;
 pub mod fork;
 pub mod list;
 pub mod psql;
+pub mod schedule;
 pub mod show;
 pub mod start;
 pub mod stop;
@@ -19,6 +21,8 @@ pub enum Outputs {
     Delete(delete::DeleteOutput),
     Start(start::StartOutput),
     Stop(stop::StopOutput),
+    Compact(compact::CompactOutput),
+    Schedule(schedule::ScheduleOutput),
 }
 
 impl CommandOutput for Outputs {
@@ -32,6 +36,8 @@ impl CommandOutput for Outputs {
             Outputs::Delete(output) => output.to_text(),
             Outputs::Start(output) => output.to_text(),
             Outputs::Stop(output) => output.to_text(),
+            Outputs::Compact(output) => output.to_text(),
+            Outputs::Schedule(output) => output.to_text(),
         }
     }
 }

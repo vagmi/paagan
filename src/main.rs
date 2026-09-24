@@ -1,3 +1,4 @@
+mod backups;
 mod commands;
 mod config;
 mod docker;
@@ -114,6 +115,32 @@ enum Commands {
         /// Name of the instance
         name: String,
     },
+    /// Take a fresh base backup and delete WAL archive and backups older than --retain
+    Compact {
+        /// How much history to keep, e.g. 7d, 24h, 30m
+        #[arg(long, default_value = "7d")]
+        retain: String,
+        /// Also delete the newest backup older than --retain. By default it is kept so
+        /// PITR always reaches back the full --retain period.
+        #[arg(long)]
+        strict: bool,
+        /// Report what would be removed without taking a backup or deleting anything
+        #[arg(long, conflicts_with_all = ["schedule", "unschedule"])]
+        dry_run: bool,
+        /// Register this compaction with the OS scheduler (launchd / systemd / Task
+        /// Scheduler) using a cron expression, e.g. "0 3 * * *" or @daily
+        #[arg(long, value_name = "CRON", conflicts_with = "unschedule")]
+        schedule: Option<String>,
+        /// Remove the scheduled compaction for this instance (or for --all)
+        #[arg(long)]
+        unschedule: bool,
+        /// Compact every running instance
+        #[arg(long, conflicts_with = "name")]
+        all: bool,
+        /// Name of the instance
+        #[arg(required_unless_present = "all")]
+        name: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -158,7 +185,9 @@ async fn main() -> Result<()> {
             at,
             old_name,
             new_name,
-        } => commands::fork::fork_instance(&config_mgr, &docker_mgr, at, old_name, new_name).await?,
+        } => {
+            commands::fork::fork_instance(&config_mgr, &docker_mgr, at, old_name, new_name).await?
+        }
 
         Commands::Delete { name, force } => {
             commands::delete::delete_instance(&config_mgr, &docker_mgr, name, force).await?
@@ -167,6 +196,32 @@ async fn main() -> Result<()> {
             commands::start::start_instance(&config_mgr, &docker_mgr, name).await?
         }
         Commands::Stop { name } => commands::stop::stop_instance(&docker_mgr, name).await?,
+        Commands::Compact {
+            retain,
+            strict,
+            dry_run,
+            schedule,
+            unschedule,
+            all,
+            name,
+        } => {
+            if let Some(cron) = schedule {
+                commands::schedule::schedule_compact(&config_mgr, name, cron, retain, strict)?
+            } else if unschedule {
+                commands::schedule::unschedule_compact(&config_mgr, name)?
+            } else {
+                commands::compact::compact(
+                    &config_mgr,
+                    &docker_mgr,
+                    name,
+                    all,
+                    retain,
+                    strict,
+                    dry_run,
+                )
+                .await?
+            }
+        }
     };
 
     match cli.format {

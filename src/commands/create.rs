@@ -1,4 +1,5 @@
 use crate::CommandOutput;
+use crate::backups;
 use crate::commands::Outputs;
 use crate::config::{ConfigManager, InitMode, InstanceMetadata};
 use crate::docker::{ContainerSpec, DockerManager};
@@ -92,11 +93,7 @@ pub async fn create_instance(
     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
     eprintln!("Taking initial baseline backup...");
-    let backup_snapshot_dir = "/backups/base_snapshot";
-    if let Err(e) = docker_mgr
-        .run_basebackup(&name, backup_snapshot_dir, init_mode)
-        .await
-    {
+    if let Err(e) = backups::take_base_backup(docker_mgr, &name, &instance_dir, init_mode).await {
         eprintln!(
             "Warning: Initial backup failed: {}. PITR will require a manual backup first.",
             e

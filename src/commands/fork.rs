@@ -1,8 +1,9 @@
 use crate::CommandOutput;
+use crate::backups;
 use crate::commands::Outputs;
+use crate::config::InitMode;
 use crate::config::{ConfigManager, InstanceMetadata};
 use crate::docker::{ContainerSpec, DockerManager};
-use crate::config::InitMode;
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
 use portpicker::pick_unused_port;
@@ -39,28 +40,51 @@ pub async fn fork_instance(
     let old_metadata = config_mgr.get_instance(&old_name)?;
     let port = pick_unused_port().context("No available ports")?;
 
-    // 1. Prepare new instance dirs
-    config_mgr.create_instance_dirs(&new_name).await?;
     let old_dir = config_mgr.get_instance_dir(&old_name);
     let new_dir = config_mgr.get_instance_dir(&new_name);
 
-    // 2. Base backup of source
-    let local_backup_snapshot_dir = old_dir.join("backups").join("base_snapshot");
-    let backup_snapshot_dir = "/backups/base_snapshot";
-
-    if at.is_none() || !local_backup_snapshot_dir.exists() {
-        eprintln!("Taking base backup of '{}'...", old_name);
-        // Clean up old backup if exists
-        if local_backup_snapshot_dir.exists() {
-            fs::remove_dir_all(&local_backup_snapshot_dir)?;
+    // 2. Pick (or take) the base backup to restore from. PITR needs the
+    // newest backup that completed at or before the target.
+    let backup_dir = match at.as_deref() {
+        None => {
+            eprintln!("Taking base backup of '{}'...", old_name);
+            backups::take_base_backup(docker_mgr, &old_name, &old_dir, old_metadata.init_mode)
+                .await?
         }
+        Some(at) => {
+            let all_backups = backups::list_backups(&old_dir)?;
+            let chosen = match backups::parse_target_time(at) {
+                Some(target) => backups::backup_for_target(&all_backups, target).with_context(|| {
+                    match all_backups.first() {
+                        Some(oldest) => format!(
+                            "'{}' is outside the retention window of '{}'; the oldest restorable time is {}",
+                            at,
+                            old_name,
+                            oldest.taken_at.to_rfc3339()
+                        ),
+                        None => format!("No base backup exists for '{}'", old_name),
+                    }
+                })?,
+                None => {
+                    eprintln!(
+                        "Warning: could not parse '{}'; using the newest base backup",
+                        at
+                    );
+                    all_backups
+                        .last()
+                        .with_context(|| format!("No base backup exists for '{}'", old_name))?
+                }
+            };
+            eprintln!(
+                "Using base backup {} of '{}' for PITR...",
+                chosen.name, old_name
+            );
+            chosen.dir.clone()
+        }
+    };
 
-        docker_mgr
-            .run_basebackup(&old_name, backup_snapshot_dir, old_metadata.init_mode)
-            .await?;
-    } else {
-        eprintln!("Using existing base backup of '{}' for PITR...", old_name);
-    }
+    // Prepare new instance dirs only once we know the fork can proceed
+    config_mgr.create_instance_dirs(&new_name).await?;
 
     eprintln!("Switching WAL on source to ensure all logs are archived...");
     docker_mgr
@@ -72,11 +96,10 @@ pub async fn fork_instance(
 
     // 3. Extract backup to new data dir
     eprintln!("Extracting backup to '{}'...", new_name);
-    let base_tar = local_backup_snapshot_dir.join("base.tar");
-    let base_tar_gz = local_backup_snapshot_dir.join("base.tar.gz");
+    let base_tar = backup_dir.join("base.tar");
+    let base_tar_gz = backup_dir.join("base.tar.gz");
 
-    let (_, new_data_subdir) =
-        docker_mgr.mount_info(old_metadata.init_mode, &old_metadata.version);
+    let (_, new_data_subdir) = docker_mgr.mount_info(old_metadata.init_mode, &old_metadata.version);
     let new_data_root = new_dir.join("data");
     let new_actual_data_dir = if let Some(ref sub) = new_data_subdir {
         new_data_root.join(sub)
@@ -108,10 +131,7 @@ pub async fn fork_instance(
     // tar's directory perms (typically 0755) trip postgres' "invalid
     // permissions" check. Force 0700.
     if matches!(old_metadata.init_mode, InitMode::Cnpg) {
-        fs::set_permissions(
-            &new_actual_data_dir,
-            fs::Permissions::from_mode(0o700),
-        )?;
+        fs::set_permissions(&new_actual_data_dir, fs::Permissions::from_mode(0o700))?;
     }
 
     // 4. Prepare recovery
